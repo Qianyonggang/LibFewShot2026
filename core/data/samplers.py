@@ -7,6 +7,21 @@ from torch.utils.data.distributed import DistributedSampler
 
 def get_sampler(dataset, few_shot, distribute, mode, config):
     if few_shot:
+        if (
+            mode in ["val", "test"]
+            and config.get("exhaustive_test", False)
+            and not distribute
+        ):
+            sampler = ExhaustiveSupportQuerySampler(
+                data_list=dataset.data_list,
+                label_list=dataset.label_list,
+                label_num=dataset.label_num,
+                episode_size=config["episode_size"],
+                shot_num=config["test_shot"],
+                query_num=config["test_query"],
+            )
+            return sampler
+
         # Check if FGFL mode is enabled by classifier name
         classifier_name = config.get("classifier", {}).get("name", "")
         use_fgfl = "GAIN" in classifier_name.upper()
@@ -58,6 +73,91 @@ def get_sampler(dataset, few_shot, distribute, mode, config):
         else:
             sampler = None
     return sampler
+
+
+class ExhaustiveSupportQuerySampler(Sampler):
+    """Sampler for fixed-support exhaustive query evaluation.
+
+    Expected path convention:
+      - support samples contain `test/support/`
+      - query samples contain `test/query/`
+    """
+
+    def __init__(
+        self,
+        data_list,
+        label_list,
+        label_num,
+        episode_size,
+        shot_num,
+        query_num,
+    ):
+        super(ExhaustiveSupportQuerySampler, self).__init__(label_list)
+        self.episode_size = episode_size
+        self.shot_num = shot_num
+        self.query_num = query_num
+
+        support_idx = [[] for _ in range(label_num)]
+        query_idx = [[] for _ in range(label_num)]
+        for idx, (path, label) in enumerate(zip(data_list, label_list)):
+            normalized = str(path).replace("\\", "/")
+            if "test/support/" in normalized:
+                support_idx[label].append(idx)
+            elif "test/query/" in normalized:
+                query_idx[label].append(idx)
+
+        self.episodes = []
+        class_chunks = []
+        for cls in range(label_num):
+            cls_support = support_idx[cls]
+            cls_query = query_idx[cls]
+            if len(cls_support) == 0 or len(cls_query) == 0:
+                continue
+
+            support_take = [cls_support[i % len(cls_support)] for i in range(shot_num)]
+            chunks = [
+                cls_query[i : i + query_num]
+                for i in range(0, len(cls_query), query_num)
+            ]
+            chunks = [
+                chunk + [chunk[-1]] * (query_num - len(chunk))
+                if len(chunk) < query_num
+                else chunk
+                for chunk in chunks
+            ]
+            class_chunks.append((support_take, chunks))
+
+        if len(class_chunks) == 0:
+            return
+
+        max_chunk_num = max(len(chunks) for _, chunks in class_chunks)
+        for i in range(max_chunk_num):
+            episode = []
+            for support_take, chunks in class_chunks:
+                chosen_chunk = chunks[i % len(chunks)]
+                episode.extend(support_take + chosen_chunk)
+            self.episodes.append(torch.tensor(episode, dtype=torch.int64))
+
+    def __len__(self):
+        if len(self.episodes) == 0:
+            return 0
+        return (len(self.episodes) + self.episode_size - 1) // self.episode_size
+
+    def __iter__(self):
+        if len(self.episodes) == 0:
+            return
+
+        batch = []
+        for ep in self.episodes:
+            batch.append(ep)
+            if len(batch) == self.episode_size:
+                yield torch.cat(batch)
+                batch = []
+
+        if len(batch) > 0:
+            while len(batch) < self.episode_size:
+                batch.append(batch[-1])
+            yield torch.cat(batch)
 
 
 class CategoriesSampler(Sampler):

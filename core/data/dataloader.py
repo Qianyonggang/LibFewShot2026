@@ -61,6 +61,7 @@ def get_dataloader(config, mode, model_type, distribute):
             mode=mode,
             use_memory=config["use_memory"],
             trfms=None,  # No transforms in dataset
+            pre_center_crop_size=config.get("pre_center_crop_size"),
             freq_trfms=None,  # No post-frequency transforms
             enable_freq_domain=config.get("enable_freq_domain", True),
             freq_config=config.get("freq_processing", {}),
@@ -71,6 +72,7 @@ def get_dataloader(config, mode, model_type, distribute):
             data_root=config["data_root"],
             mode=mode,
             use_memory=config["use_memory"],
+            pre_center_crop_size=config.get("pre_center_crop_size"),
         )
 
     if config["dataloader_num"] == 1 or mode in ["val", "test"]:
