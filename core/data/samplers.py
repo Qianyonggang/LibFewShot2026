@@ -7,18 +7,23 @@ from torch.utils.data.distributed import DistributedSampler
 
 def get_sampler(dataset, few_shot, distribute, mode, config):
     if few_shot:
-        if (
-            mode in ["val", "test"]
-            and config.get("exhaustive_test", False)
-            and not distribute
-        ):
-            sampler = ExhaustiveSupportQuerySampler(
+        if mode in ["val", "test"] and config.get("exhaustive_test", False):
+            sampler_class = (
+                DistributedExhaustiveSupportQuerySampler
+                if distribute
+                else ExhaustiveSupportQuerySampler
+            )
+            sampler = sampler_class(
                 data_list=dataset.data_list,
                 label_list=dataset.label_list,
                 label_num=dataset.label_num,
-                episode_size=config["episode_size"],
+                episode_size=config["episode_size"] // config["n_gpu"]
+                if distribute
+                else config["episode_size"],
                 shot_num=config["test_shot"],
                 query_num=config["test_query"],
+                rank=config.get("rank", 0),
+                world_size=max(config.get("n_gpu", 1), 1),
             )
             return sampler
 
@@ -91,6 +96,8 @@ class ExhaustiveSupportQuerySampler(Sampler):
         episode_size,
         shot_num,
         query_num,
+        rank=0,
+        world_size=1,
     ):
         super(ExhaustiveSupportQuerySampler, self).__init__(label_list)
         self.episode_size = episode_size
@@ -162,6 +169,43 @@ class ExhaustiveSupportQuerySampler(Sampler):
             while len(batch) < self.episode_size:
                 batch.append(batch[-1])
             yield torch.cat(batch)
+
+
+class DistributedExhaustiveSupportQuerySampler(ExhaustiveSupportQuerySampler):
+    """Distributed version of exhaustive support-query sampler.
+
+    It shards pre-built exhaustive episodes across ranks to avoid duplicated
+    validation/test computation in DDP.
+    """
+
+    def __init__(
+        self,
+        data_list,
+        label_list,
+        label_num,
+        episode_size,
+        shot_num,
+        query_num,
+        rank,
+        world_size,
+    ):
+        super(DistributedExhaustiveSupportQuerySampler, self).__init__(
+            data_list=data_list,
+            label_list=label_list,
+            label_num=label_num,
+            episode_size=episode_size,
+            shot_num=shot_num,
+            query_num=query_num,
+        )
+
+        self.rank = rank
+        self.world_size = world_size
+
+        # shard episodes by rank
+        local_episodes = self.episodes[self.rank :: self.world_size]
+        if len(local_episodes) == 0:
+            local_episodes = [self.episodes[self.rank % len(self.episodes)]]
+        self.episodes = local_episodes
 
 
 class CategoriesSampler(Sampler):
