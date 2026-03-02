@@ -129,6 +129,13 @@ class GeneralDataset(Dataset):
 
         return data_list, label_list, class_label_dict
 
+    def _resolve_image_path(self, image_name):
+        """Resolve image path for datasets with or without an `images/` directory."""
+        image_path = os.path.join(self.data_root, "images", image_name)
+        if os.path.exists(image_path):
+            return image_path
+        return os.path.join(self.data_root, image_name)
+
     def _load_cache(self, cache_path):
         """Load a pickle cache from saved file.(when use_memory option is True)
 
@@ -158,10 +165,7 @@ class GeneralDataset(Dataset):
             tuple: A tuple of (data list, label list, class-label dict)
         """
         data_list, label_list, class_label_dict = self._generate_data_list()
-        data_list = [
-            self.loader(os.path.join(self.data_root, "images", path))
-            for path in data_list
-        ]
+        data_list = [self.loader(self._resolve_image_path(path)) for path in data_list]
 
         with open(cache_path, "wb") as fout:
             pickle.dump((data_list, label_list, class_label_dict), fout)
@@ -183,7 +187,7 @@ class GeneralDataset(Dataset):
             data = self.data_list[idx]
         else:
             image_name = self.data_list[idx]
-            image_path = os.path.join(self.data_root, "images", image_name)
+            image_path = self._resolve_image_path(image_name)
             data = self.loader(image_path)
 
         if self.trfms is not None:

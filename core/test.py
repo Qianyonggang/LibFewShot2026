@@ -260,11 +260,12 @@ class Test(object):
             self.config["train_episode"], self.config["episode_size"]
         )
 
-        assert (
-            self.config["test_episode"] % self.config["episode_size"] == 0
-        ), "test_episode {} % episode_size  {} != 0".format(
-            self.config["test_episode"], self.config["episode_size"]
-        )
+        if not self.config.get("exhaustive_test", False):
+            assert (
+                self.config["test_episode"] % self.config["episode_size"] == 0
+            ), "test_episode {} % episode_size  {} != 0".format(
+                self.config["test_episode"], self.config["episode_size"]
+            )
 
     def _init_model(self, config):
         """
