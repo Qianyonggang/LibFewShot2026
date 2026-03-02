@@ -60,6 +60,7 @@ class GeneralDataset(Dataset):
         loader=default_loader,
         use_memory=True,
         trfms=None,
+        pre_center_crop_size=None,
     ):
         """Initializing `GeneralDataset`.
 
@@ -82,6 +83,7 @@ class GeneralDataset(Dataset):
         self.loader = loader
         self.use_memory = use_memory
         self.trfms = trfms
+        self.pre_center_crop_size = pre_center_crop_size
 
         if use_memory:
             cache_path = os.path.join(data_root, "{}.pth".format(mode))
@@ -136,6 +138,20 @@ class GeneralDataset(Dataset):
             return image_path
         return os.path.join(self.data_root, image_name)
 
+    def _preprocess_image(self, data):
+        """Apply optional preprocessing before later transforms."""
+        if self.pre_center_crop_size is not None:
+            crop_size = int(self.pre_center_crop_size)
+            width, height = data.size
+            left = max((width - crop_size) // 2, 0)
+            top = max((height - crop_size) // 2, 0)
+            right = min(left + crop_size, width)
+            bottom = min(top + crop_size, height)
+            data = data.crop((left, top, right, bottom))
+            if data.size != (crop_size, crop_size):
+                data = data.resize((crop_size, crop_size), Image.BILINEAR)
+        return data
+
     def _load_cache(self, cache_path):
         """Load a pickle cache from saved file.(when use_memory option is True)
 
@@ -165,7 +181,10 @@ class GeneralDataset(Dataset):
             tuple: A tuple of (data list, label list, class-label dict)
         """
         data_list, label_list, class_label_dict = self._generate_data_list()
-        data_list = [self.loader(self._resolve_image_path(path)) for path in data_list]
+        data_list = [
+            self._preprocess_image(self.loader(self._resolve_image_path(path)))
+            for path in data_list
+        ]
 
         with open(cache_path, "wb") as fout:
             pickle.dump((data_list, label_list, class_label_dict), fout)
@@ -188,7 +207,7 @@ class GeneralDataset(Dataset):
         else:
             image_name = self.data_list[idx]
             image_path = self._resolve_image_path(image_name)
-            data = self.loader(image_path)
+            data = self._preprocess_image(self.loader(image_path))
 
         if self.trfms is not None:
             data = self.trfms(data)
@@ -210,6 +229,7 @@ class FGFLDataset(GeneralDataset):
         loader=default_loader,
         use_memory=True,
         trfms=None,
+        pre_center_crop_size=None,
         freq_trfms=None,
         enable_freq_domain=True,
         freq_config=None,
@@ -224,7 +244,14 @@ class FGFLDataset(GeneralDataset):
             dataset_name (str): Name of the dataset ("MiniImageNet", "CUB", "TieredImageNet")
         """
         self.dataset_name = dataset_name
-        super().__init__(data_root, mode, loader, use_memory, trfms)
+        super().__init__(
+            data_root,
+            mode,
+            loader,
+            use_memory,
+            trfms,
+            pre_center_crop_size=pre_center_crop_size,
+        )
         self.freq_trfms = freq_trfms
         self.enable_freq_domain = enable_freq_domain and FGFL_DCT_AVAILABLE
         self.freq_config = freq_config or {}
@@ -302,7 +329,9 @@ class FGFLDataset(GeneralDataset):
         
         # Load images with dataset-specific path
         data_list = [
-            self.loader(os.path.join(self.data_root, dataset_config["image_dir"], path))
+            self._preprocess_image(
+                self.loader(self._resolve_image_path(path))
+            )
             for path in data_list
         ]
 
@@ -347,8 +376,8 @@ class FGFLDataset(GeneralDataset):
             data = self.data_list[idx]
         else:
             image_name = self.data_list[idx]
-            image_path = os.path.join(self.data_root, dataset_config["image_dir"], image_name)
-            data = self.loader(image_path)
+            image_path = self._resolve_image_path(image_name)
+            data = self._preprocess_image(self.loader(image_path))
 
         # Do NOT apply transforms here - they will be handled by collate_fn
         # Only apply frequency domain processing if enabled
